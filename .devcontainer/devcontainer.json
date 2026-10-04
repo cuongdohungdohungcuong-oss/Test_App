@@ -6,7 +6,8 @@
     "codespaces": {
       "openFiles": [
         "README.md",
-        "app.py"
+        "app.py",
+        "quan_ly_san_xuat/app.py"
       ]
     },
     "vscode": {
@@ -17,17 +18,23 @@
       ]
     }
   },
-  "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install --user -r requirements.txt; pip3 install --user streamlit; echo '✅ Packages installed and Requirements met'",
+  "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install --user -r requirements.txt; [ -f quan_ly_san_xuat/requirements.txt ] && pip3 install --user -r quan_ly_san_xuat/requirements.txt; pip3 install --user streamlit; echo '✅ Packages installed and Requirements met'",
   "postAttachCommand": {
-    "server": "streamlit run app.py --server.enableCORS false --server.enableXsrfProtection false"
+    "server": "streamlit run app.py --server.enableCORS false --server.enableXsrfProtection false",
+    "san_xuat": "cd quan_ly_san_xuat && streamlit run app.py --server.port 8502 --server.enableCORS false --server.enableXsrfProtection false"
   },
   "portsAttributes": {
     "8501": {
-      "label": "Application",
+      "label": "Quản lý kho",
       "onAutoForward": "openPreview"
+    },
+    "8502": {
+      "label": "Quản lý sản xuất",
+      "onAutoForward": "notify"
     }
   },
   "forwardPorts": [
-    8501
+    8501,
+    8502
   ]
 }
