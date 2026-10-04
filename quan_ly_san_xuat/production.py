@@ -256,3 +256,145 @@ def report_variance(thsx: pd.DataFrame, ma_lenh: list[str] | None = None) -> pd.
     g["ChenhLech"] = (g["SoLuongTT"] - g["DinhMucKH"]).round(3)
     g["TyLeHaoHut"] = (g["ChenhLech"] / g["DinhMucKH"].where(g["DinhMucKH"] > 0) * 100).round(2)
     return g[cols].sort_values("MaNL").reset_index(drop=True)
+
+
+# ---------- Tồn kho ----------
+
+LOAI_NHAP = "Nhập kho"
+LOAI_XUAT = "Xuất kho"
+LOAI_DIEU_CHINH = "Điều chỉnh"
+LOAI_PHIEU_TAY = [LOAI_NHAP, LOAI_DIEU_CHINH]
+
+
+def signed_qty(gd: pd.DataFrame) -> pd.Series:
+    """Nhập kho: +SoLuong, Xuất kho: -SoLuong, Điều chỉnh: SoLuong giữ dấu (có thể âm)."""
+    q = pd.to_numeric(gd["SoLuong"], errors="coerce").fillna(0.0)
+    loai = gd["LoaiGiaoDich"].astype(str).str.strip()
+    sign = loai.map({LOAI_NHAP: 1.0, LOAI_XUAT: -1.0, LOAI_DIEU_CHINH: 1.0}).fillna(0.0)
+    return q * sign
+
+
+def stock_on_hand(gd: pd.DataFrame) -> pd.DataFrame:
+    """Tồn kho hiện tại theo kho và mã hàng (nguyên liệu hoặc thành phẩm)."""
+    d = norm_df(gd, ex.GD_COLUMNS)
+    cols = ["MaKho", "MaNguyenLieu", "TenNguyenLieu", "TonKho", "DonVi"]
+    if d.empty:
+        return pd.DataFrame(columns=cols)
+    d["_q"] = signed_qty(d)
+    d["MaKho"] = d["MaKho"].astype(str).str.strip()
+    d["MaNguyenLieu"] = d["MaNguyenLieu"].astype(str).str.strip()
+    g = (
+        d.groupby(["MaKho", "MaNguyenLieu"])
+        .agg(TenNguyenLieu=("TenNguyenLieu", "last"), TonKho=("_q", "sum"), DonVi=("DonVi", "last"))
+        .reset_index()
+    )
+    g["TonKho"] = g["TonKho"].round(3)
+    return g[cols].sort_values(["MaKho", "MaNguyenLieu"]).reset_index(drop=True)
+
+
+def check_material(
+    ma_tp: str, san_luong: float, ma_kho: str, dm_ct: pd.DataFrame, dm_nl: pd.DataFrame, gd: pd.DataFrame
+) -> pd.DataFrame:
+    """Nhu cầu NL theo định mức so với tồn tại kho xuất; ThieuHut > 0 là thiếu."""
+    need = planned_consumption(ma_tp, san_luong, dm_ct, dm_nl)
+    stock = stock_on_hand(gd)
+    stock = stock[stock["MaKho"] == _s(ma_kho)].set_index("MaNguyenLieu")["TonKho"]
+    need["TonKho"] = need["MaNL"].astype(str).map(stock).fillna(0.0).astype(float)
+    need["ThieuHut"] = (need["DinhMucKH"] - need["TonKho"]).clip(lower=0).round(3)
+    return need[["MaNL", "TenNL", "DinhMucKH", "TonKho", "ThieuHut", "DonVi"]]
+
+
+def next_ma_phieu(gd: pd.DataFrame, ngay: date, prefix: str = "PN") -> str:
+    p = f"{prefix}-{ngay:%Y%m%d}-"
+    codes = set(gd["MaPhieu"].astype(str).str.strip()) if "MaPhieu" in gd.columns else set()
+    nums = [int(c[len(p):]) for c in codes if c.startswith(p) and c[len(p):].isdigit()]
+    n = (max(nums) + 1) if nums else 1
+    while f"{p}{n:03d}" in codes:
+        n += 1
+    return f"{p}{n:03d}"
+
+
+# ---------- In phiếu lệnh ----------
+
+
+def _html_table(df: pd.DataFrame, headers: dict[str, str]) -> str:
+    from html import escape
+
+    head = "".join(f"<th>{escape(h)}</th>" for h in headers.values())
+    rows = []
+    for _, r in df.iterrows():
+        cells = []
+        for c in headers:
+            v = r.get(c, "")
+            if isinstance(v, (int, float)) and not pd.isna(v):
+                cells.append(f'<td class="n">{v:,.2f}</td>')
+            else:
+                cells.append(f"<td>{escape(_s(v))}</td>")
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+
+
+def order_sheet_html(
+    lenh: dict[str, Any], consumption: pd.DataFrame, names: dict[str, dict[str, str]] | None = None
+) -> str:
+    """Phiếu lệnh sản xuất dạng HTML để in (mở trong trình duyệt → Ctrl+P).
+
+    consumption: MaNL, TenNL, DinhMucKH và (nếu đã hoàn thành) SoLuongTT.
+    names: {"kho": {...}, "dc": {...}} để hiển thị tên kho / dây chuyền.
+    """
+    from html import escape
+
+    names = names or {}
+    kho, dc = names.get("kho", {}), names.get("dc", {})
+
+    def fmt_date(v: Any) -> str:
+        ts = pd.to_datetime(v, errors="coerce")
+        return "" if pd.isna(ts) else ts.strftime("%d/%m/%Y")
+
+    def with_name(code: Any, m: dict[str, str]) -> str:
+        c = _s(code)
+        return f"{c} — {m[c]}" if m.get(c) else c
+
+    info = [
+        ("Mã lệnh", _s(lenh.get("MaLenh"))),
+        ("Trạng thái", _s(lenh.get("TrangThai"))),
+        ("Ngày kế hoạch", fmt_date(lenh.get("NgayKH"))),
+        ("Ngày hoàn thành", fmt_date(lenh.get("NgayHoanThanh"))),
+        ("Thành phẩm", f"{_s(lenh.get('MaTP'))} — {_s(lenh.get('TenTP'))}"),
+        ("Số lô", _s(lenh.get("SoLo")) or _s(lenh.get("MaLenh"))),
+        ("Sản lượng kế hoạch", f"{to_num(lenh.get('SanLuongKH')):,.2f} {_s(lenh.get('DonVi')) or 'kg'}"),
+        ("Sản lượng thực tế", f"{to_num(lenh.get('SanLuongTT')):,.2f}" if to_num(lenh.get("SanLuongTT")) else ""),
+        ("Dây chuyền / Ca", f"{with_name(lenh.get('MaDC'), dc)} · {_s(lenh.get('Ca'))}"),
+        ("Kho xuất NL", with_name(lenh.get("MaKhoNL"), kho)),
+        ("Kho nhập TP", with_name(lenh.get("MaKhoTP"), kho)),
+        ("Ghi chú", _s(lenh.get("GhiChu"))),
+    ]
+    info_html = "".join(f"<tr><th>{escape(k)}</th><td>{escape(v)}</td></tr>" for k, v in info)
+    headers = {"MaNL": "Mã NL", "TenNL": "Tên nguyên liệu", "DinhMucKH": "Định mức (kg)"}
+    if "SoLuongTT" in consumption.columns:
+        headers["SoLuongTT"] = "Thực tế (kg)"
+    else:
+        headers["_tt"] = "Thực tế (kg)"
+    table = _html_table(consumption.assign(_tt=""), headers)
+    title = f"Phiếu lệnh sản xuất {_s(lenh.get('MaLenh'))}"
+    return f"""<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><title>{escape(title)}</title>
+<style>
+body{{font-family:Arial,Helvetica,sans-serif;color:#111;margin:24px;font-size:13px}}
+h1{{font-size:20px;margin:0 0 4px}} .sub{{color:#555;margin-bottom:16px}}
+table{{border-collapse:collapse;width:100%;margin-bottom:18px}}
+th,td{{border:1px solid #999;padding:6px 8px;text-align:left;vertical-align:top}}
+.info th{{width:28%;background:#f2f2f2}} thead th{{background:#f2f2f2}} td.n{{text-align:right}}
+.sign{{display:flex;justify-content:space-between;margin-top:36px;text-align:center}}
+.sign div{{width:30%}} .sign small{{display:block;color:#555;margin-top:56px}}
+@media print{{body{{margin:0}}}}
+</style></head><body>
+<h1>{escape(title)}</h1>
+<div class="sub">In ngày {date.today():%d/%m/%Y}</div>
+<table class="info">{info_html}</table>
+<h2 style="font-size:15px">Nguyên liệu</h2>
+{table}
+<div class="sign"><div><b>Người lập</b><small>(Ký, ghi rõ họ tên)</small></div>
+<div><b>Tổ trưởng sản xuất</b><small>(Ký, ghi rõ họ tên)</small></div>
+<div><b>Thủ kho</b><small>(Ký, ghi rõ họ tên)</small></div></div>
+</body></html>"""

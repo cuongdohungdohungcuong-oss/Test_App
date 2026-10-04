@@ -12,15 +12,18 @@ streamlit run app.py
 
 Tài khoản mặc định: `admin` / `admin123`. Hãy đổi mật khẩu sau khi triển khai.
 
+Trong GitHub Codespaces / Dev Container, app kho chạy ở cổng **8501** và app sản xuất tự chạy ở cổng **8502**.
+
 ## Chức năng
 
 | Tab | Nội dung |
 |---|---|
-| Lệnh sản xuất | Danh sách, lọc theo ngày/trạng thái; tạo/sửa lệnh (xem trước nhu cầu NL theo BOM); chuyển trạng thái Kế hoạch → Đang sản xuất → Hoàn thành / Hủy |
+| Lệnh sản xuất | Danh sách, lọc theo ngày/trạng thái; tạo/sửa lệnh (xem trước nhu cầu NL theo BOM và tồn kho); chuyển trạng thái Kế hoạch → Đang sản xuất → Hoàn thành / Hủy — **kiểm tra đủ NL tại kho xuất trước khi bắt đầu** (có thể bỏ qua có chủ đích); **in phiếu lệnh** (HTML, Ctrl+P để in/PDF) |
 | Ghi nhận thực tế | Nhập sản lượng & tiêu hao NL thực tế; hoàn thành lệnh sẽ sinh phiếu `<MaLenh>-X` (xuất NL) và `<MaLenh>-N` (nhập TP) |
 | Công thức (BOM) | Định mức kg NL / 1.000 kg thành phẩm, kiểm tra tổng = 1.000 |
 | Báo cáo sản xuất | KPI, sản lượng KH vs TT theo ngày/TP/dây chuyền/ca, hao hụt NL; tải Excel |
-| Phiếu kho SX | Phiếu kho sinh từ sản xuất (cùng cột với sheet `GiaoDich` của app kho) |
+| Tồn kho | Tồn hiện tại theo kho và mã hàng; phiếu **Nhập kho** (`PN-…`) và **Điều chỉnh** tồn (`DC-…`, số âm để giảm) |
+| Phiếu kho | Toàn bộ phiếu kho: sinh từ sản xuất và nhập tay (cùng cột với sheet `GiaoDich` của app kho) |
 | Danh mục | Thành phẩm, nguyên liệu, dây chuyền, kho, người dùng (quản trị) |
 
 ## Vai trò

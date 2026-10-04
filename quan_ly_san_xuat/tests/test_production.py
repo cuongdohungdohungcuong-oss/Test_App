@@ -105,3 +105,43 @@ def test_report_output():
     assert r.loc[0, "SoLenhHoanThanh"] == 1
     assert r.loc[0, "SanLuongKH"] == 2000
     assert r.loc[0, "TyLeHoanThanh"] == pytest.approx(47.5)
+
+
+def _phieu(loai, ma, sl, kho="K01"):
+    return {c: "" for c in ex.GD_COLUMNS} | {"LoaiGiaoDich": loai, "MaNguyenLieu": ma, "SoLuong": sl, "MaKho": kho}
+
+
+def test_stock_on_hand():
+    gd = pd.DataFrame(
+        [
+            _phieu("Nhập kho", "NL001", 1000),
+            _phieu("Xuất kho", "NL001", 300),
+            _phieu("Điều chỉnh", "NL001", -50),
+            _phieu("Nhập kho", "NL001", 70, kho="K03"),
+        ]
+    )
+    s = pr.stock_on_hand(gd).set_index(["MaKho", "MaNguyenLieu"])["TonKho"]
+    assert s[("K01", "NL001")] == pytest.approx(650)
+    assert s[("K03", "NL001")] == pytest.approx(70)
+
+
+def test_check_material(dm_ct, dm_nl):
+    gd = pd.DataFrame([_phieu("Nhập kho", "NL001", 1000), _phieu("Nhập kho", "NL002", 1000, kho="K03")])
+    chk = pr.check_material("TP001", 2000, "K01", dm_ct, dm_nl, gd).set_index("MaNL")
+    assert chk.loc["NL001", "TonKho"] == 1000
+    assert chk.loc["NL001", "ThieuHut"] == pytest.approx(100)  # cần 1100
+    assert chk.loc["NL002", "TonKho"] == 0  # tồn ở kho khác không tính
+    assert chk.loc["NL002", "ThieuHut"] == pytest.approx(500)
+
+
+def test_next_ma_phieu():
+    gd = pd.DataFrame({"MaPhieu": ["PN-20261004-002"]})
+    assert pr.next_ma_phieu(gd, date(2026, 10, 4)) == "PN-20261004-003"
+    assert pr.next_ma_phieu(gd, date(2026, 10, 4), "DC") == "DC-20261004-001"
+
+
+def test_order_sheet_html_escapes(dm_ct, dm_nl):
+    lenh = _lenh(GhiChu="<script>x</script>")
+    html = pr.order_sheet_html(lenh, pr.planned_consumption("TP001", 2000, dm_ct, dm_nl), {"kho": {"K01": "Kho A"}})
+    assert "LSX-20261004-001" in html and "K01 — Kho A" in html and "1,100.00" in html
+    assert "<script>" not in html

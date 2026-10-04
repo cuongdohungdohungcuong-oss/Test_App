@@ -449,10 +449,29 @@ def render_lenh_sx() -> None:
         else:
             labels = dict(zip(active["MaLenh"].astype(str), active["TenTP"].astype(str) + " · " + active["TrangThai"].astype(str)))
             pick = st.selectbox("Chọn lệnh", codes, format_func=_labeler(labels), key=f"lsx_tt_pick_{ver}")
-            cur = str(lsx.loc[lsx["MaLenh"].astype(str) == pick, "TrangThai"].iloc[0])
             m = lsx["MaLenh"].astype(str) == pick
+            lenh = lsx[m].iloc[0]
+            cur = str(lenh["TrangThai"])
+            thieu = pd.DataFrame()
+            bo_qua = False
+            if cur == pr.TT_KE_HOACH:
+                chk = pr.check_material(
+                    lenh["MaTP"], pr.to_num(lenh["SanLuongKH"]), lenh["MaKhoNL"], dm_ct, dm_nl, st.session_state._gd
+                )
+                thieu = chk[chk["ThieuHut"] > 0]
+                if thieu.empty:
+                    st.success(f"Kho {_cell(lenh['MaKhoNL'])} đủ nguyên liệu cho lệnh này.")
+                else:
+                    st.warning(f"Kho {_cell(lenh['MaKhoNL'])} thiếu {len(thieu)} nguyên liệu cho lệnh này:")
+                    st.dataframe(thieu, width="stretch", hide_index=True)
+                    bo_qua = st.checkbox("Vẫn bắt đầu dù thiếu nguyên liệu", key=f"lsx_override_{pick}_{ver}")
             b1, b2, b3, _ = st.columns([1, 1, 1, 2])
-            if b1.button("Bắt đầu sản xuất", disabled=cur != pr.TT_KE_HOACH, width="stretch", key=f"lsx_start_{ver}"):
+            if b1.button(
+                "Bắt đầu sản xuất",
+                disabled=cur != pr.TT_KE_HOACH or (not thieu.empty and not bo_qua),
+                width="stretch",
+                key=f"lsx_start_{ver}",
+            ):
                 new = lsx.astype(object)
                 new.loc[m, "TrangThai"] = pr.TT_DANG_SX
                 _save_lsx(new, f"Lệnh {pick} chuyển sang «Đang sản xuất».")
@@ -465,6 +484,8 @@ def render_lenh_sx() -> None:
             ):
                 _save_lsx(lsx[~m].reset_index(drop=True), f"Đã xóa lệnh {pick}.")
             st.caption("Hoàn thành lệnh tại tab «Ghi nhận thực tế». Chỉ xóa được lệnh đang ở trạng thái Kế hoạch.")
+
+    render_in_phieu(lsx, kho_names, dc_names)
 
     if not can_plan():
         return
@@ -503,16 +524,13 @@ def render_lenh_sx() -> None:
     )
     ghi_chu = c3.text_input("Ghi chú", value=_cell(cur["GhiChu"]), key=f"{k}_gc")
 
-    st.markdown("**Nhu cầu nguyên liệu theo định mức**")
+    st.markdown(f"**Nhu cầu nguyên liệu theo định mức và tồn tại kho {kho_nl}**")
     for w in pr.validate_bom(pr.bom_for(ma_tp, dm_ct)):
         st.warning(w)
-    st.dataframe(
-        pr.planned_consumption(ma_tp, sl_kh, dm_ct, dm_nl).rename(
-            columns={"DinhMuc": "DinhMuc (kg/tấn)", "DinhMucKH": "CanXuat"}
-        ),
-        width="stretch",
-        hide_index=True,
-    )
+    chk = pr.check_material(ma_tp, sl_kh, kho_nl, dm_ct, dm_nl, st.session_state._gd)
+    st.dataframe(chk.rename(columns={"DinhMucKH": "CanXuat"}), width="stretch", hide_index=True)
+    if (chk["ThieuHut"] > 0).any():
+        st.caption("Có nguyên liệu thiếu (ThieuHut > 0): vẫn lưu được kế hoạch, cần nhập kho trước khi bắt đầu sản xuất.")
 
     if st.button("Lưu lệnh sản xuất", type="primary", key=f"{k}_save"):
         row = {
@@ -543,6 +561,102 @@ def render_lenh_sx() -> None:
             for c in ex.LSX_COLUMNS:
                 new.loc[m, c] = row[c]
             _save_lsx(new, f"Đã cập nhật lệnh {pick}.")
+
+
+def render_in_phieu(lsx: pd.DataFrame, kho_names: dict[str, str], dc_names: dict[str, str]) -> None:
+    with st.expander("In phiếu lệnh sản xuất"):
+        codes = sorted(lsx["MaLenh"].astype(str).tolist(), reverse=True)
+        if not codes:
+            st.caption("Chưa có lệnh sản xuất.")
+            return
+        labels = dict(zip(lsx["MaLenh"].astype(str), lsx["TenTP"].astype(str) + " · " + lsx["TrangThai"].astype(str)))
+        pick = st.selectbox("Chọn lệnh", codes, format_func=_labeler(labels), key="in_pick")
+        lenh = lsx[lsx["MaLenh"].astype(str) == pick].iloc[0].to_dict()
+        if str(lenh["TrangThai"]) == pr.TT_HOAN_THANH:
+            th = st.session_state._thsx
+            cons = th[th["MaLenh"].astype(str) == pick][["MaNL", "TenNL", "DinhMucKH", "SoLuongTT"]].copy()
+            for c in ("DinhMucKH", "SoLuongTT"):
+                cons[c] = pd.to_numeric(cons[c], errors="coerce")
+        else:
+            cons = pr.planned_consumption(
+                lenh["MaTP"], pr.to_num(lenh["SanLuongKH"]), st.session_state._dm_ct, st.session_state._dm_nl
+            )[["MaNL", "TenNL", "DinhMucKH"]]
+        html = pr.order_sheet_html(lenh, cons, {"kho": kho_names, "dc": dc_names})
+        st.download_button(
+            "Tải phiếu lệnh (HTML để in)",
+            data=html.encode("utf-8"),
+            file_name=f"phieu_lenh_{pick}.html",
+            mime="text/html",
+            key=f"in_dl_{pick}",
+        )
+        st.caption("Mở file trong trình duyệt và bấm Ctrl+P để in hoặc lưu PDF.")
+
+
+# ---------- Tồn kho ----------
+
+
+def render_ton_kho() -> None:
+    gd: pd.DataFrame = st.session_state._gd
+    kho_names = _name_map(st.session_state._dm_kho, "MaKho", "TenKho")
+    nl_names = _name_map(st.session_state._dm_nl, "MaNL", "TenNL")
+    tp_names = _name_map(st.session_state._dm_tp, "MaTP", "TenTP")
+
+    st.subheader("Tồn kho hiện tại")
+    st.caption("Tính từ sheet PhieuKho: Nhập kho cộng, Xuất kho trừ, Điều chỉnh cộng theo dấu số lượng.")
+    stock = pr.stock_on_hand(gd)
+    kho_sel = st.multiselect("Kho", list(kho_names), default=list(kho_names), format_func=_labeler(kho_names), key="tk_kho")
+    view = stock[stock["MaKho"].isin(kho_sel)] if kho_sel else stock
+    st.dataframe(view, width="stretch", hide_index=True)
+    am = view[view["TonKho"] < 0]
+    if not am.empty:
+        st.warning(f"{len(am)} dòng tồn kho âm: kiểm tra lại phiếu nhập hoặc nhập điều chỉnh tồn đầu kỳ.")
+
+    if not can_record():
+        return
+    st.subheader("Nhập kho / điều chỉnh tồn")
+    hang = {**nl_names, **tp_names}
+    if not hang or not kho_names:
+        st.info("Cần khai báo nguyên liệu/thành phẩm và kho trong tab Danh mục.")
+        return
+    ver = int(st.session_state.get("tk_ver", 0))
+    with st.form(f"tk_form_{ver}"):
+        c1, c2, c3 = st.columns(3)
+        ngay = c1.date_input("Ngày *", value=date.today())
+        loai = c1.selectbox("Loại phiếu *", pr.LOAI_PHIEU_TAY)
+        ma_kho = c2.selectbox(
+            "Kho *", list(kho_names), index=_idx(list(kho_names), "K01"), format_func=_labeler(kho_names)
+        )
+        ma_hang = c2.selectbox("Nguyên liệu / thành phẩm *", list(hang), format_func=_labeler(hang))
+        so_luong = c3.number_input("Số lượng (kg) * — điều chỉnh giảm thì nhập số âm", value=0.0, step=100.0)
+        so_lo = c3.text_input("Số lô")
+        ghi_chu = st.text_input("Ghi chú")
+        ok = st.form_submit_button("Lưu phiếu", type="primary")
+    if ok:
+        if so_luong == 0 or (loai == pr.LOAI_NHAP and so_luong < 0):
+            st.error("Số lượng phải khác 0; phiếu Nhập kho phải > 0.")
+        else:
+            row = ex.row_from_form(
+                {
+                    "Ngay": pd.Timestamp(ngay),
+                    "MaPhieu": pr.next_ma_phieu(gd, ngay, "PN" if loai == pr.LOAI_NHAP else "DC"),
+                    "LoaiGiaoDich": loai,
+                    "MaNguyenLieu": ma_hang,
+                    "TenNguyenLieu": hang.get(ma_hang, ""),
+                    "SoLuong": float(so_luong),
+                    "DonVi": "kg",
+                    "MaKho": ma_kho,
+                    "MaNCC": "",
+                    "SoLo": so_lo.strip(),
+                    "HanSuDung": pd.NaT,
+                    "GhiChu": ghi_chu.strip(),
+                },
+                None,
+            )
+            ex.save_sheets({ex.SHEET_GD: pd.concat([gd, pd.DataFrame([row])], ignore_index=True)})
+            reload_session_data()
+            st.session_state["tk_ver"] = ver + 1
+            st.session_state["_flash"] = f"Đã lưu phiếu {row['MaPhieu']}."
+            st.rerun()
 
 
 # ---------- Ghi nhận thực tế ----------
@@ -713,7 +827,8 @@ def render_bao_cao() -> None:
 def render_phieu_kho() -> None:
     gd: pd.DataFrame = st.session_state._gd
     st.caption(
-        "Phiếu kho sinh tự động khi hoàn thành lệnh: `<MaLenh>-X` xuất nguyên liệu, `<MaLenh>-N` nhập thành phẩm. "
+        "Phiếu sinh tự động khi hoàn thành lệnh (`<MaLenh>-X` xuất NL, `<MaLenh>-N` nhập TP) "
+        "và phiếu nhập kho / điều chỉnh nhập tay ở tab Tồn kho (`PN-…`, `DC-…`). "
         "Cùng cột với sheet GiaoDich của app kho để có thể chép sang."
     )
     q = st.text_input("Lọc theo từ khóa", key="pk_q", placeholder="Ví dụ: LSX-2026, NL001, Nhập kho…")
@@ -786,7 +901,9 @@ def main() -> None:
                 width="stretch",
             )
 
-    tabs = st.tabs(["Lệnh sản xuất", "Ghi nhận thực tế", "Công thức (BOM)", "Báo cáo sản xuất", "Phiếu kho SX", "Danh mục"])
+    tabs = st.tabs(
+        ["Lệnh sản xuất", "Ghi nhận thực tế", "Công thức (BOM)", "Báo cáo sản xuất", "Tồn kho", "Phiếu kho", "Danh mục"]
+    )
     with tabs[0]:
         render_lenh_sx()
     with tabs[1]:
@@ -796,8 +913,10 @@ def main() -> None:
     with tabs[3]:
         render_bao_cao()
     with tabs[4]:
-        render_phieu_kho()
+        render_ton_kho()
     with tabs[5]:
+        render_phieu_kho()
+    with tabs[6]:
         labels = ["Thành phẩm", "Nguyên liệu", "Dây chuyền", "Kho"] + (["Người dùng (quản trị)"] if _is_quantri() else [])
         sub = st.tabs(labels)
         for t, spec in zip(sub, (SPEC_TP, SPEC_NL, SPEC_DC, SPEC_KHO)):

@@ -26,6 +26,29 @@ def append_sample_orders(n: int = 30, days: int = 30, seed: int | None = None) -
     dc_codes = dc["MaDC"].astype(str).tolist() or [""]
 
     today = date.today()
+    # Tồn đầu kỳ đủ cho n lệnh lớn nhất (20 tấn) để dữ liệu mẫu không âm kho
+    ngay_ton = today - timedelta(days=days + 1)
+    ct = dm_ct.assign(DinhMuc=pd.to_numeric(dm_ct["DinhMuc"], errors="coerce").fillna(0.0))
+    ten_nl = dict(zip(ct["MaNL"].astype(str), ct["TenNL"].astype(str)))
+    for ma_nl, dm_max in ct.groupby(ct["MaNL"].astype(str))["DinhMuc"].max().items():
+        row = ex.row_from_form(
+            {
+                "Ngay": pd.Timestamp(ngay_ton),
+                "MaPhieu": pr.next_ma_phieu(gd, ngay_ton, "PN"),
+                "LoaiGiaoDich": pr.LOAI_NHAP,
+                "MaNguyenLieu": ma_nl,
+                "TenNguyenLieu": ten_nl.get(ma_nl, ""),
+                "SoLuong": round(dm_max / pr.BOM_BASE * 20000 * n * 1.1, 0),
+                "DonVi": "kg",
+                "MaKho": "K01",
+                "SoLo": "MAU-TONDAU",
+                "HanSuDung": pd.NaT,
+                "GhiChu": "Tồn đầu kỳ (dữ liệu mẫu)",
+            },
+            None,
+        )
+        gd = pd.concat([pr.norm_df(gd, ex.GD_COLUMNS), pd.DataFrame([row])], ignore_index=True)
+
     added = 0
     for _ in range(n):
         ngay = today - timedelta(days=rnd.randint(0, days))
